@@ -103,6 +103,20 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
       s"UC Delta API client should be UCDeltaCatalogClientImpl, was ${client.getClass}")
   }
 
+  test("UC Delta client honors the warehouse option and defaults to the Spark catalog") {
+    val aliased = UCDeltaCatalogClientImpl.fromCatalogOptions(
+      "spark_alias",
+      options("uri" -> "http://uc", "token" -> "tok", "WaReHoUsE" -> "physical_catalog"),
+      noFallback)
+    assert(aliased.ucCatalogName.contains("physical_catalog"))
+
+    val default = UCDeltaCatalogClientImpl.fromCatalogOptions(
+      "spark_alias",
+      options("uri" -> "http://uc", "token" -> "tok"),
+      noFallback)
+    assert(default.ucCatalogName.isEmpty)
+  }
+
   test("AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled returns None when flag is off") {
     val result = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
       "test_cat", options("deltaRestApi.enabled" -> "false"), noFallback)
@@ -881,6 +895,28 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
       client.loadTable(Identifier.of(Array("sch"), "tbl"))
     }
     assert(thrown eq ex)
+  }
+
+  test("warehouse alias is used for UC requests but not Spark-facing table metadata") {
+    val requested = scala.collection.mutable.ArrayBuffer.empty[(String, String, String)]
+    val stub = new ThrowingUCDeltaClient {
+      override def loadTable(tableIdentifier: StorageTableIdentifier): TableInfo = {
+        val ns = tableIdentifier.getNamespace
+        requested += ((ns(0), ns(1), tableIdentifier.getName))
+        existingDeltaTableInfo()
+      }
+    }
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = "spark_alias",
+      ucClient = stub,
+      ucCatalogName = Some("physical_catalog"))
+    val identifier = Identifier.of(Array("schema_name"), "table_name")
+    assert(client.tableExists(identifier))
+    val table = client.loadTable(identifier).asInstanceOf[V1Table].catalogTable
+
+    assert(requested.toSeq === Seq.fill(2)(
+      ("physical_catalog", "schema_name", "table_name")))
+    assert(table.identifier.catalog.contains("spark_alias"))
   }
 
   // -------------------------------------------------------------------------

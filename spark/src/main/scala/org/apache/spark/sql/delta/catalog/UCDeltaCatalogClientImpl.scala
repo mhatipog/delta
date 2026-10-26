@@ -68,7 +68,8 @@ private[catalog] class UCDeltaCatalogClientImpl(
     ucClient: UCDeltaClient,
     serverSidePlanningEnabled: Boolean = false,
     fallbackLoadTableFunc: Identifier => Table
-    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc)
+    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc,
+    private[catalog] val ucCatalogName: Option[String] = None)
   extends AbstractDeltaCatalogClient with Logging {
 
   // -------------------------------------------------------------------------
@@ -586,7 +587,9 @@ private[catalog] class UCDeltaCatalogClientImpl(
       s"UC table identifier must be one of <schema>.<table> or <catalog>.<schema>.<table>; " +
         s"got namespace of length ${ns.length}: '${ns.mkString(".")}' " +
         s"(full identifier: '${ident.toString}')")
-    new StorageTableIdentifier(Array(catalogName, ns(0)), ident.name())
+    // The Spark catalog can be an alias for a different Unity Catalog warehouse.
+    // Only UC API requests use the physical name; Spark-facing identifiers keep catalogName.
+    new StorageTableIdentifier(Array(ucCatalogName.getOrElse(catalogName), ns(0)), ident.name())
   }
 
   /** Three-part dotted `catalog.schema.table` name for a Spark V2 `Identifier`. */
@@ -723,7 +726,9 @@ object UCDeltaCatalogClientImpl extends AbstractDeltaCatalogClientFactory with L
       .createUCClient(options)
       .asInstanceOf[UCDeltaClient]
     val sspEnabled = UCConfigUtils.parseBoolean(options, ServerSidePlanningEnabledKey, false)
-    new UCDeltaCatalogClientImpl(catalogName, ucClient, sspEnabled, fallbackLoadTableFunc)
+    val ucCatalogName = Option(options.get("warehouse")).filter(_.nonEmpty)
+    new UCDeltaCatalogClientImpl(
+      catalogName, ucClient, sspEnabled, fallbackLoadTableFunc, ucCatalogName)
   }
 
   /**
