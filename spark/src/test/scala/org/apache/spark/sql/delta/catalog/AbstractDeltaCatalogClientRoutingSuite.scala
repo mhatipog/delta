@@ -103,6 +103,19 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
       s"UC Delta API client should be UCDeltaCatalogClientImpl, was ${client.getClass}")
   }
 
+  test("warehouse option selects the UC name without changing the Spark alias") {
+    val configured = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
+      "spark_alias",
+      options("uri" -> "http://uc", "token" -> "tok", "warehouse" -> "physical_uc"),
+      noFallback).get.asInstanceOf[UCDeltaCatalogClientImpl]
+    assert(configured.ucCatalogName === "physical_uc")
+
+    val withoutWarehouse = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
+      "spark_alias", options("uri" -> "http://uc", "token" -> "tok"),
+      noFallback).get.asInstanceOf[UCDeltaCatalogClientImpl]
+    assert(withoutWarehouse.ucCatalogName === "spark_alias")
+  }
+
   test("AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled returns None when flag is off") {
     val result = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
       "test_cat", options("deltaRestApi.enabled" -> "false"), noFallback)
@@ -141,7 +154,9 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
       requiredProtocol: UCDeltaModels.DeltaProtocol = null,
       suggestedProtocol: UCDeltaModels.DeltaProtocol = null,
       requiredProperties: util.Map[String, String] = java.util.Collections.emptyMap(),
-      suggestedProperties: util.Map[String, String] = java.util.Collections.emptyMap()
+      suggestedProperties: util.Map[String, String] = java.util.Collections.emptyMap(),
+      catalogName: String = "main",
+      ucCatalogNameOverride: Option[String] = None
   ): (UCDeltaCatalogClientImpl, RecordingStubUCDeltaClient) = {
     val stub = new RecordingStubUCDeltaClient(
       new StagingTableInfo(
@@ -153,7 +168,8 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
         requiredProperties,
         suggestedProperties,
         /* storageProperties = */ java.util.Map.of("fs.s3a.access.key", "stage-key")))
-    val client = new UCDeltaCatalogClientImpl(catalogName = "main", ucClient = stub)
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = catalogName, ucClient = stub, ucCatalogNameOverride = ucCatalogNameOverride)
     (client, stub)
   }
 
@@ -195,6 +211,14 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
     assert(out.get(TableCatalog.OPTION_PREFIX + "fs.s3a.access.key") === "stage-key",
       "credential properties must also be copied onto the `option.`-prefixed key so they " +
         "are picked up as writeOptions downstream")
+  }
+
+  test("createStagingTable sends the warehouse catalog name to UC") {
+    val (client, stub) = newRecordingClient(
+      catalogName = "spark_alias", ucCatalogNameOverride = Some("physical_uc"))
+    client.createStagingTable(
+      Identifier.of(Array("sch"), "tbl"), stageProps("delta.catalogManaged" -> "supported"))
+    assert(stub.stagedRequests.toList === List(("physical_uc", "sch", "tbl")))
   }
 
   test("createStagingTable: PROP_LOCATION already set throws") {
@@ -736,6 +760,26 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
     val merged = v1.storage.properties
     assert(merged.get("ucTableId") === Some(tableId.toString))
     assert(merged.get("fs.s3a.access.key") === Some("key"))
+  }
+
+  test("loadTable looks up the UC warehouse while retaining the Spark catalog alias") {
+    var requested: Option[StorageTableIdentifier] = None
+    val stub = new ThrowingUCDeltaClient {
+      override def loadTable(tableIdentifier: StorageTableIdentifier): TableInfo = {
+        requested = Some(tableIdentifier)
+        existingDeltaTableInfo()
+      }
+    }
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = "spark_alias",
+      ucClient = stub,
+      ucCatalogNameOverride = Some("physical_uc"))
+    val table = client.loadTable(Identifier.of(Array("sch"), "tbl"))
+      .asInstanceOf[V1Table].catalogTable
+    assert(requested.isDefined)
+    assert(requested.get.getNamespace.toSeq === Seq("physical_uc", "sch"))
+    assert(requested.get.getName === "tbl")
+    assert(table.identifier.catalog === Some("spark_alias"))
   }
 
   test("loadTable uses only the catalog maintenance operation list") {

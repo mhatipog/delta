@@ -68,8 +68,13 @@ private[catalog] class UCDeltaCatalogClientImpl(
     ucClient: UCDeltaClient,
     serverSidePlanningEnabled: Boolean = false,
     fallbackLoadTableFunc: Identifier => Table
-    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc)
+    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc,
+    ucCatalogNameOverride: Option[String] = None)
   extends AbstractDeltaCatalogClient with Logging {
+
+  // Spark-facing catalog identifiers must keep the catalog alias, while REST calls use the
+  // Unity Catalog name configured through the connector's optional "warehouse" setting.
+  private[catalog] val ucCatalogName: String = ucCatalogNameOverride.getOrElse(catalogName)
 
   // -------------------------------------------------------------------------
   // DeltaCatalogClient: tableExists
@@ -586,12 +591,12 @@ private[catalog] class UCDeltaCatalogClientImpl(
       s"UC table identifier must be one of <schema>.<table> or <catalog>.<schema>.<table>; " +
         s"got namespace of length ${ns.length}: '${ns.mkString(".")}' " +
         s"(full identifier: '${ident.toString}')")
-    new StorageTableIdentifier(Array(catalogName, ns(0)), ident.name())
+    new StorageTableIdentifier(Array(ucCatalogName, ns(0)), ident.name())
   }
 
   /** Three-part dotted `catalog.schema.table` name for a Spark V2 `Identifier`. */
   private def fullQualifiedTableName(ident: Identifier): String =
-    s"$catalogName.${ident.namespace().mkString(".")}.${ident.name()}"
+    s"$ucCatalogName.${ident.namespace().mkString(".")}.${ident.name()}"
 
   private def toV1Table(ident: Identifier, info: TableInfo): V1Table = {
     val m = info.getMetadata
@@ -723,7 +728,9 @@ object UCDeltaCatalogClientImpl extends AbstractDeltaCatalogClientFactory with L
       .createUCClient(options)
       .asInstanceOf[UCDeltaClient]
     val sspEnabled = UCConfigUtils.parseBoolean(options, ServerSidePlanningEnabledKey, false)
-    new UCDeltaCatalogClientImpl(catalogName, ucClient, sspEnabled, fallbackLoadTableFunc)
+    val ucCatalogNameOverride = Option(options.get("warehouse")).filter(_.nonEmpty)
+    new UCDeltaCatalogClientImpl(
+      catalogName, ucClient, sspEnabled, fallbackLoadTableFunc, ucCatalogNameOverride)
   }
 
   /**
