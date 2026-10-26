@@ -187,7 +187,7 @@ object UCCommitCoordinatorBuilder
       .map(_(3))
       .filter { catalogName: String =>
         val connector = allConfigs.get(s"$SPARK_SQL_CATALOG_PREFIX$catalogName")
-        connector.contains(UNITY_CATALOG_CONNECTOR_CLASS)
+        connector.exists(matchesCatalogConnector(_, UNITY_CATALOG_CONNECTOR_CLASS))
       }
 
     // For each UC catalog, collect all sub-keys into a flat config map
@@ -215,6 +215,25 @@ object UCCommitCoordinatorBuilder
         }
       }
       .toList
+  }
+
+  /**
+   * Match the configured UC connector or one of its subclasses without loading unrelated
+   * connectors. An exact match also works when the UC connector is not on the classpath.
+   */
+  private[delta] def matchesCatalogConnector(
+      connectorClassName: String,
+      requiredClassName: String): Boolean = {
+    if (connectorClassName == requiredClassName) {
+      true
+    } else {
+      try {
+        Utils.classForName(requiredClassName).isAssignableFrom(
+          Utils.classForName(connectorClassName))
+      } catch {
+        case NonFatal(_) => false
+      }
+    }
   }
 
   /**

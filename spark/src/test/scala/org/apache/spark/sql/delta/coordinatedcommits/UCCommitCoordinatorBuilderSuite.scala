@@ -312,6 +312,17 @@ class UCCommitCoordinatorBuilderSuite extends SparkFunSuite with SharedSparkSess
     when(mockFactory.createUCClient(meq(ucConfig))).thenReturn(mockClient)
   }
 
+  test("UC catalog connector recognition handles subclasses and missing classes") {
+    val uc = UCCommitCoordinatorBuilder.UNITY_CATALOG_CONNECTOR_CLASS
+    assert(UCCommitCoordinatorBuilder.matchesCatalogConnector(uc, uc))
+    assert(UCCommitCoordinatorBuilder.matchesCatalogConnector(
+      "java.util.ArrayList", "java.util.AbstractList"))
+    assert(!UCCommitCoordinatorBuilder.matchesCatalogConnector(
+      "java.util.HashMap", "java.util.AbstractList"))
+    assert(!UCCommitCoordinatorBuilder.matchesCatalogConnector(
+      "no.such.Catalog", "java.util.AbstractList"))
+  }
+
   test("getCatalogConfigs returns all sub-keys") {
     val catalogName = "test_catalog"
     val uri = "https://test-uri.com"
