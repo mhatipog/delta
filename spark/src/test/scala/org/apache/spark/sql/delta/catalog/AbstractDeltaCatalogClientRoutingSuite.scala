@@ -103,6 +103,21 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
       s"UC Delta API client should be UCDeltaCatalogClientImpl, was ${client.getClass}")
   }
 
+  test("UC Delta client uses warehouse for UC identifiers and Spark name as fallback") {
+    val catalogOptions = options(
+      "uri" -> "http://uc",
+      "token" -> "tok",
+      "warehouse" -> "actual_uc_catalog")
+    val aliasedClient = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
+      "spark_alias", catalogOptions, noFallback).get.asInstanceOf[UCDeltaCatalogClientImpl]
+    assert(aliasedClient.ucCatalogName == "actual_uc_catalog")
+
+    val unaliasedClient = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
+      "spark_alias", options("uri" -> "http://uc", "token" -> "tok"), noFallback).get
+      .asInstanceOf[UCDeltaCatalogClientImpl]
+    assert(unaliasedClient.ucCatalogName == "spark_alias")
+  }
+
   test("AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled returns None when flag is off") {
     val result = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
       "test_cat", options("deltaRestApi.enabled" -> "false"), noFallback)
@@ -180,6 +195,39 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
     val m = new util.HashMap[String, String]()
     kv.foreach { case (k, v) => m.put(k, v) }
     m
+  }
+
+  test("createStagingTable uses UC warehouse when Spark has a different catalog name") {
+    val (_, stub) = newRecordingClient()
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = "spark_alias",
+      ucClient = stub,
+      ucCatalogNameOverride = Some("actual_uc_catalog"))
+    client.createStagingTable(
+      Identifier.of(Array("schema"), "my_table"),
+      stageProps("delta.catalogManaged" -> "supported"))
+    assert(stub.stagedRequests.toSeq === Seq(("actual_uc_catalog", "schema", "my_table")))
+    assert(client.tableExists(Identifier.of(Array("schema"), "my_table")))
+    assert(stub.loadedRequests.toSeq === Seq(("actual_uc_catalog", "schema", "my_table")))
+  }
+
+  test("loadTable uses UC warehouse but keeps the Spark catalog alias in V1 metadata") {
+    val loadedRequests = scala.collection.mutable.ArrayBuffer.empty[(String, String, String)]
+    val stub = new StubUCDeltaClient(existingDeltaTableInfo()) {
+      override def loadTable(tableIdentifier: StorageTableIdentifier): TableInfo = {
+        val ns = tableIdentifier.getNamespace
+        loadedRequests += ((ns(0), ns(1), tableIdentifier.getName))
+        existingDeltaTableInfo()
+      }
+    }
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = "spark_alias",
+      ucClient = stub,
+      ucCatalogNameOverride = Some("actual_uc_catalog"))
+    val table = client.loadTable(Identifier.of(Array("schema"), "my_table"))
+      .asInstanceOf[V1Table]
+    assert(loadedRequests.toSeq === Seq(("actual_uc_catalog", "schema", "my_table")))
+    assert(table.catalogTable.identifier.catalog.contains("spark_alias"))
   }
 
   test("createStagingTable: managed Delta create on the new path stages + augments props") {
@@ -1038,6 +1086,14 @@ private class StubUCDeltaClient(loadTableResult: => TableInfo) extends ThrowingU
 private class RecordingStubUCDeltaClient(info: StagingTableInfo) extends ThrowingUCDeltaClient {
   val stagedRequests: scala.collection.mutable.ArrayBuffer[(String, String, String)] =
     scala.collection.mutable.ArrayBuffer.empty
+  val loadedRequests: scala.collection.mutable.ArrayBuffer[(String, String, String)] =
+    scala.collection.mutable.ArrayBuffer.empty
+  override def loadTable(tableIdentifier: StorageTableIdentifier): TableInfo = {
+    val ns = tableIdentifier.getNamespace
+    loadedRequests += ((ns(0), ns(1), tableIdentifier.getName))
+    // tableExists checks only that UC acknowledges the identifier, not the table payload.
+    null
+  }
   override def createStagingTable(
       tableIdentifier: StorageTableIdentifier): StagingTableInfo = {
     val ns = tableIdentifier.getNamespace

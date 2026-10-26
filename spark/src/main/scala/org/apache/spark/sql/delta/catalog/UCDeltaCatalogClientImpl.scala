@@ -68,8 +68,12 @@ private[catalog] class UCDeltaCatalogClientImpl(
     ucClient: UCDeltaClient,
     serverSidePlanningEnabled: Boolean = false,
     fallbackLoadTableFunc: Identifier => Table
-    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc)
+    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc,
+    // Spark's catalog name can be an alias for a differently named Unity Catalog warehouse.
+    ucCatalogNameOverride: Option[String] = None)
   extends AbstractDeltaCatalogClient with Logging {
+
+  private[catalog] val ucCatalogName: String = ucCatalogNameOverride.getOrElse(catalogName)
 
   // -------------------------------------------------------------------------
   // DeltaCatalogClient: tableExists
@@ -586,12 +590,12 @@ private[catalog] class UCDeltaCatalogClientImpl(
       s"UC table identifier must be one of <schema>.<table> or <catalog>.<schema>.<table>; " +
         s"got namespace of length ${ns.length}: '${ns.mkString(".")}' " +
         s"(full identifier: '${ident.toString}')")
-    new StorageTableIdentifier(Array(catalogName, ns(0)), ident.name())
+    new StorageTableIdentifier(Array(ucCatalogName, ns(0)), ident.name())
   }
 
   /** Three-part dotted `catalog.schema.table` name for a Spark V2 `Identifier`. */
   private def fullQualifiedTableName(ident: Identifier): String =
-    s"$catalogName.${ident.namespace().mkString(".")}.${ident.name()}"
+    s"$ucCatalogName.${ident.namespace().mkString(".")}.${ident.name()}"
 
   private def toV1Table(ident: Identifier, info: TableInfo): V1Table = {
     val m = info.getMetadata
@@ -723,7 +727,11 @@ object UCDeltaCatalogClientImpl extends AbstractDeltaCatalogClientFactory with L
       .createUCClient(options)
       .asInstanceOf[UCDeltaClient]
     val sspEnabled = UCConfigUtils.parseBoolean(options, ServerSidePlanningEnabledKey, false)
-    new UCDeltaCatalogClientImpl(catalogName, ucClient, sspEnabled, fallbackLoadTableFunc)
+    val ucCatalogNameOverride = options.asScala.collectFirst {
+      case (key, value) if key.equalsIgnoreCase("warehouse") && value.nonEmpty => value
+    }
+    new UCDeltaCatalogClientImpl(
+      catalogName, ucClient, sspEnabled, fallbackLoadTableFunc, ucCatalogNameOverride)
   }
 
   /**
