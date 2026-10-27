@@ -765,8 +765,8 @@ class DeltaTableTestsMixin:
         for columns in (schema, schema.fields):
             with self.subTest(schema_input=type(columns).__name__):
                 with self.tempTable() as tableName:
-                    delta_table = DeltaTable.create(self.spark).tableName(tableName) \\
-                        .addColumns(columns).execute()
+                    delta_table = (DeltaTable.create(self.spark).tableName(tableName)
+                                   .addColumns(columns).execute())
                     actual_schema = delta_table.toDF().schema
                     self.assertEqual(actual_schema["id"].metadata.get("comment"),
                                      "Business identifier")
