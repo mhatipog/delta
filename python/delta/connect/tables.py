@@ -743,7 +743,9 @@ class DeltaTableBuilder(object):
                 "Schema must be StructType or a list of StructField.", [cols])
 
         for col in cols:
-            self.addColumn(col.name, col.dataType, col.nullable)
+            self.addColumn(
+                col.name, col.dataType, col.nullable,
+                comment=col.metadata.get("comment"))
         return self
 
     addColumns.__doc__ = LocalDeltaTableBuilder.addColumns.__doc__

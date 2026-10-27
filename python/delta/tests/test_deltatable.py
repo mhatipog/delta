@@ -756,6 +756,23 @@ class DeltaTableTestsMixin:
                                        nullables={"key", "value", "value2"},
                                        partitioningColumns=["value", "value2"])
 
+    def test_create_table_with_existing_schema_preserves_column_comments(self) -> None:
+        schema = StructType([
+            StructField("id", IntegerType(), False, metadata={"comment": "Business identifier"}),
+            StructField("name", StringType(), True, metadata={"comment": "Display name"})
+        ])
+        # Both StructType and a list of StructFields are supported by addColumns.
+        for columns in (schema, schema.fields):
+            with self.subTest(schema_input=type(columns).__name__):
+                with self.tempTable() as tableName:
+                    delta_table = DeltaTable.create(self.spark).tableName(tableName) \\
+                        .addColumns(columns).execute()
+                    actual_schema = delta_table.toDF().schema
+                    self.assertEqual(actual_schema["id"].metadata.get("comment"),
+                                     "Business identifier")
+                    self.assertEqual(actual_schema["name"].metadata.get("comment"),
+                                     "Display name")
+
     def test_create_replace_table_with_cluster_by(self) -> None:
         df = self.spark.createDataFrame([('a', 1), ('b', 2), ('c', 3)], ["key", "value"])
         with self.tempTable() as tableName:
