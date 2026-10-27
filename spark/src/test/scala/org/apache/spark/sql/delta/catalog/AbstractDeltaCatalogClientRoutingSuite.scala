@@ -103,6 +103,22 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
       s"UC Delta API client should be UCDeltaCatalogClientImpl, was ${client.getClass}")
   }
 
+  test("warehouse option selects the UC REST catalog rather than the Spark alias") {
+    val client = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
+      "spark_alias",
+      options("uri" -> "http://uc", "token" -> "tok", "warehouse" -> "uc_catalog"),
+      noFallback).get.asInstanceOf[UCDeltaCatalogClientImpl]
+    assert(client.ucCatalogName === "uc_catalog")
+  }
+
+  test("UC REST catalog defaults to the Spark catalog name without warehouse") {
+    val client = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
+      "spark_alias",
+      options("uri" -> "http://uc", "token" -> "tok"),
+      noFallback).get.asInstanceOf[UCDeltaCatalogClientImpl]
+    assert(client.ucCatalogName === "spark_alias")
+  }
+
   test("AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled returns None when flag is off") {
     val result = AbstractDeltaCatalogClient.fromCatalogOptionsIfEnabled(
       "test_cat", options("deltaRestApi.enabled" -> "false"), noFallback)
@@ -195,6 +211,18 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
     assert(out.get(TableCatalog.OPTION_PREFIX + "fs.s3a.access.key") === "stage-key",
       "credential properties must also be copied onto the `option.`-prefixed key so they " +
         "are picked up as writeOptions downstream")
+  }
+
+  test("createStagingTable uses the UC warehouse, not the Spark catalog alias") {
+    val (_, stub) = newRecordingClient()
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = "spark_alias",
+      ucClient = stub,
+      ucCatalogNameOverride = Some("uc_catalog"))
+    client.createStagingTable(
+      Identifier.of(Array("sch"), "tbl"),
+      stageProps("delta.catalogManaged" -> "supported"))
+    assert(stub.stagedRequests === Seq(("uc_catalog", "sch", "tbl")))
   }
 
   test("createStagingTable: PROP_LOCATION already set throws") {
@@ -736,6 +764,18 @@ class AbstractDeltaCatalogClientRoutingSuite extends QueryTest with DeltaSQLComm
     val merged = v1.storage.properties
     assert(merged.get("ucTableId") === Some(tableId.toString))
     assert(merged.get("fs.s3a.access.key") === Some("key"))
+  }
+
+  test("loadTable keeps the Spark catalog alias in returned V1Table metadata") {
+    val client = new UCDeltaCatalogClientImpl(
+      catalogName = "spark_alias",
+      ucClient = new StubUCDeltaClient(existingDeltaTableInfo()),
+      ucCatalogNameOverride = Some("uc_catalog"))
+    val table = client.loadTable(Identifier.of(Array("sch"), "tbl"))
+      .asInstanceOf[V1Table].catalogTable
+    assert(table.identifier.catalog === Some("spark_alias"))
+    assert(table.identifier.database === Some("sch"))
+    assert(table.identifier.table === "tbl")
   }
 
   test("loadTable uses only the catalog maintenance operation list") {

@@ -68,8 +68,13 @@ private[catalog] class UCDeltaCatalogClientImpl(
     ucClient: UCDeltaClient,
     serverSidePlanningEnabled: Boolean = false,
     fallbackLoadTableFunc: Identifier => Table
-    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc)
+    = UCDeltaCatalogClientImpl.defaultFallbackLoadTableFunc,
+    ucCatalogNameOverride: Option[String] = None)
   extends AbstractDeltaCatalogClient with Logging {
+
+  // Spark can expose a UC catalog under an alias. REST requests use the UC catalog name;
+  // Spark-facing CatalogTable identifiers must continue to use the Spark alias.
+  private[catalog] val ucCatalogName: String = ucCatalogNameOverride.getOrElse(catalogName)
 
   // -------------------------------------------------------------------------
   // DeltaCatalogClient: tableExists
@@ -586,7 +591,7 @@ private[catalog] class UCDeltaCatalogClientImpl(
       s"UC table identifier must be one of <schema>.<table> or <catalog>.<schema>.<table>; " +
         s"got namespace of length ${ns.length}: '${ns.mkString(".")}' " +
         s"(full identifier: '${ident.toString}')")
-    new StorageTableIdentifier(Array(catalogName, ns(0)), ident.name())
+    new StorageTableIdentifier(Array(ucCatalogName, ns(0)), ident.name())
   }
 
   /** Three-part dotted `catalog.schema.table` name for a Spark V2 `Identifier`. */
@@ -723,7 +728,11 @@ object UCDeltaCatalogClientImpl extends AbstractDeltaCatalogClientFactory with L
       .createUCClient(options)
       .asInstanceOf[UCDeltaClient]
     val sspEnabled = UCConfigUtils.parseBoolean(options, ServerSidePlanningEnabledKey, false)
-    new UCDeltaCatalogClientImpl(catalogName, ucClient, sspEnabled, fallbackLoadTableFunc)
+    // The UC Spark connector's `warehouse` option maps a Spark catalog alias to
+    // a different UC catalog name. Preserve the Spark alias for CatalogTable metadata.
+    val ucCatalogNameOverride = Option(options.get("warehouse")).filter(_.nonEmpty)
+    new UCDeltaCatalogClientImpl(
+      catalogName, ucClient, sspEnabled, fallbackLoadTableFunc, ucCatalogNameOverride)
   }
 
   /**
