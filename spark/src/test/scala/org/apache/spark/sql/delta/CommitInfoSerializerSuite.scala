@@ -34,6 +34,22 @@ import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructT
  */
 class CommitInfoSerializerSuite extends QueryTest with SharedSparkSession {
 
+  // This table is written by the delta-rs Python package in the CI workflow.
+  test("delta-rs OPTIMIZE commit is readable through Spark history") {
+    val path = sys.env("DELTA_RS_INTEROP_TABLE")
+    val optimized = spark.sql(s"DESCRIBE HISTORY delta.`$path`")
+      .where("operation = 'OPTIMIZE'")
+      .select("operationMetrics")
+      .collect()
+    assert(optimized.length == 1)
+    val metrics = optimized.head.getMap[String, String](0)
+    assert(metrics("numFilesAdded").toLong > 0L)
+    assert(metrics("filesAdded").startsWith("{"))
+    assert(Set("true", "false").contains(metrics("preserveInsertionOrder")))
+    assert(spark.read.format("delta").load(path).count() == 5L)
+  }
+
+
   test("CommitInfo accepts non-string operation metrics from other writers") {
     val json =
       """{"commitInfo":{"timestamp":123,"operation":"OPTIMIZE","operationMetrics":{""" +

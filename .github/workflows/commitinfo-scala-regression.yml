@@ -41,7 +41,43 @@ jobs:
       - name: Prepare pinned Unity Catalog
         uses: ./.github/actions/setup-unitycatalog
 
+      - name: Generate real Delta-rs OPTIMIZE commit
+        run: |
+          python -m pip install --disable-pip-version-check 'deltalake>=1.0,<2.0' 'pyarrow>=17,<24'
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from importlib.metadata import version
+          import pyarrow as pa
+          from deltalake import DeltaTable, write_deltalake
+
+          path = Path(os.environ["GITHUB_WORKSPACE"]) / "delta-rs-interop-table"
+          for i in range(5):
+              write_deltalake(
+                  str(path), pa.table({"value": pa.array([i], type=pa.int64())}),
+                  mode="overwrite" if i == 0 else "append")
+          dt = DeltaTable(str(path))
+          result = dt.optimize.compact()
+          entries = []
+          for log in sorted((path / "_delta_log").glob("*.json")):
+              for line in log.read_text().splitlines():
+                  action = json.loads(line)
+                  if action.get("commitInfo", {}).get("operation") == "OPTIMIZE":
+                      entries.append(action["commitInfo"])
+          assert len(entries) == 1, f"Expected one OPTIMIZE commit, got {len(entries)}"
+          metrics = entries[0]["operationMetrics"]
+          assert type(metrics["numFilesAdded"]) is int
+          assert type(metrics["preserveInsertionOrder"]) is bool
+          assert isinstance(metrics["filesAdded"], str)
+          print("delta-rs version:", version("deltalake"))
+          print("OPTIMIZE result:", result)
+          print("On-disk metrics:", json.dumps(metrics, sort_keys=True))
+          PY
+
       - name: Run CommitInfo Scala regression suite
+        env:
+          DELTA_RS_INTEROP_TABLE: ${{ github.workspace }}/delta-rs-interop-table
         run: build/sbt -DsparkVersion=4.0 "spark/testOnly org.apache.spark.sql.delta.CommitInfoSerializerSuite"
 
       - name: Upload test reports
@@ -49,6 +85,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: delta-commitinfo-scala-reports
-          path: '**/target/test-reports/*.xml'
+          path: |
+            **/target/test-reports/*.xml
+            delta-rs-interop-table/_delta_log/*.json
           if-no-files-found: ignore
           retention-days: 7
