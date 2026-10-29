@@ -1,3 +1,4 @@
+# Fork-only integration validation; not part of the upstream PR.
 name: Delta CommitInfo Scala regression
 on:
   push:
