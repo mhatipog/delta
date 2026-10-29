@@ -52,8 +52,8 @@ class CommitInfoSerializerSuite extends QueryTest with SharedSparkSession {
   // delta-rs #2317 fixed the nested values but retained native JSON number/bool metrics.
   test("modern delta-rs OPTIMIZE metrics preserve string-encoded details") {
     val json = """{"commitInfo":{"timestamp":1711125995487,"operation":"OPTIMIZE",
-      "operationMetrics":{"filesAdded":"{\\"avg\\":19956.0,\\"max\\":19956,\\"min\\":19956,\\"totalFiles\\":1,\\"totalSize\\":19956}",
-      "filesRemoved":"{\\"avg\\":4851.833333333333,\\"max\\":10358,\\"min\\":3734,\\"totalFiles\\":6,\\"totalSize\\":29111}",
+      "operationMetrics":{"filesAdded":"{\"avg\":19956.0,\"max\":19956,\"min\":19956,\"totalFiles\":1,\"totalSize\":19956}",
+      "filesRemoved":"{\"avg\":4851.833333333333,\"max\":10358,\"min\":3734,\"totalFiles\":6,\"totalSize\":29111}",
       "numFilesAdded":1,"numFilesRemoved":6,"preserveInsertionOrder":true}}}"""
     val metrics = Action.fromJson(json).asInstanceOf[CommitInfo].operationMetrics.get
     assert(metrics("numFilesAdded") == "1")
